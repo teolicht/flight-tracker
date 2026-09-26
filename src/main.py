@@ -1,5 +1,7 @@
 import json
 import requests
+import os
+import time
 
 # PARSE
 # Take aircraft.json and populate each aicraft to its own Aircraft object
@@ -8,9 +10,8 @@ import requests
 # QUERY
 # Take aicraft hex code and query information from hexdb.io
 
-# IMPORTANT: keep a cache of currently tracked aircraft .Do NOT run specially enrich_aircraft() every time
-# aircraft.json is updated, since it makes a bunch of HTTP requests and takes a while.
-aircraft_cache = []
+dirname = os.path.dirname(__file__)
+
 
 class Aircraft:
     def __init__(
@@ -61,46 +62,39 @@ class Aircraft:
         self.route_iata = route_iata
         self.image = image
 
+    def update(self, data: dict) -> None:
+        # Guaranteed fields
+        self.messages = data["messages"]
+        self.seen = data["seen"]
+        self.rssi = data["rssi"]
+        # Fields may be none
+        flight = data.get("flight")
+        self.flight = flight.strip() if flight is not None else None
+        self.squawk = data.get("squawk")
+        self.lat = data.get("lat")
+        self.lon = data.get("lon")
+        self.altitude = data.get("altitude")
+        self.vert_rate = data.get("vert_rate")
+        self.track = data.get("track")
+        self.speed = data.get("speed")
+        self.category = data.get("category")
+
     def coords(self) -> tuple[float, float] | None:
         if self.lat is None or self.lon is None:
             return None
         return self.lat, self.lon
 
 
-
-def parse_aircraft() -> list[Aircraft]:
-    # TODO: proper relative path
-    with open("json/aircraft.json", "r") as file:
-        json_str = file.read()
-    acs = json.loads(json_str)
-
-    ac_objs = []
-    for ac in acs["aircraft"]:
-        obj = Aircraft(ac["hex"], ac["messages"], ac["seen"], ac["rssi"])
-        if "squawk" in ac:
-            obj.squawk = ac["squawk"]
-        if "flight" in ac:
-            # For some reason the flight numbers have spaces in the end
-            obj.flight = ac["flight"].strip() 
-        if "lat" in ac:
-            obj.lat = ac["lat"]
-        if "lon" in ac:
-            obj.lon = ac["lon"]
-        if "altitude" in ac:
-            obj.altitude = ac["altitude"]
-        if "vert_rate" in ac:
-            obj.vert_rate = ac["vert_rate"]
-        if "track" in ac:
-            obj.track = ac["track"]
-        if "speed" in ac:
-            obj.speed = ac["speed"]
-        if "category" in ac:
-            obj.category = ac["category"]
-        ac_objs.append(obj)
-
-    return ac_objs
+# {hex: Aircraft}
+active_aircraft: dict[str, Aircraft] = {}
 
 
+def read_json(filename: str) -> dict:
+    with open(os.path.join(dirname, f"json/{filename}"), "r") as file:
+        return json.loads(file.read())
+
+
+# Run only once when a new aircraft is detected
 def enrich_aircraft(ac: Aircraft) -> None:
     """
     Populates aircraft's
@@ -138,8 +132,45 @@ def enrich_aircraft(ac: Aircraft) -> None:
             ac.route_iata = (dep, des)
 
 
+def aircraft_string(ac: Aircraft) -> str:
+    lines = [
+        "-" * 50,
+        f"{ac.manufacturer} {ac.model} -- {ac.registration} flown by {ac.owner}",
+        f"Position: {ac.lat}, {ac.lon}",
+        f"{ac.altitude} ft | {ac.vert_rate} fpm | {ac.speed} kts | {ac.track}°",
+    ]
+    if ac.route_icao is not None and ac.route_iata is not None:
+        lines.append(
+            f"Flight: {ac.flight} | Route: "
+            f"{ac.route_icao[0]}--{ac.route_icao[1]} "
+            f"({ac.route_iata[0]}--{ac.route_iata[1]})"
+        )
+    lines += [
+        f"Signal strength: {ac.rssi} dB",
+        f"Image link: {ac.image}",
+    ]
+    return "\n".join(lines)
 
-acs = parse_aircraft()
-for ac in acs:
-    enrich_aircraft(ac)
+
+# Main loop
+while True:
+    for data in read_json("aircraft.json")["aircraft"]:
+        if data["hex"] in active_aircraft:
+            active_aircraft[data["hex"]].update(data)
+        else:
+            obj = Aircraft(
+                data["hex"], data["messages"], data["seen"], data["rssi"]
+            )
+            obj.update(data)
+            enrich_aircraft(obj)
+            active_aircraft[data["hex"]] = obj
+
+    # Print nicely
+    output = "\n".join(
+        aircraft_string(ac)
+        for ac in active_aircraft.values()
+    )
+    print(f"\033[H{output}", end="", flush=True)
+
+    time.sleep(1)
 
