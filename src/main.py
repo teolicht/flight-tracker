@@ -2,6 +2,7 @@ import json
 import requests
 import os
 import time
+import sys
 
 # PARSE
 # Take aircraft.json and populate each aicraft to its own Aircraft object
@@ -9,9 +10,6 @@ import time
 
 # QUERY
 # Take aicraft hex code and query information from hexdb.io
-
-dirname = os.path.dirname(__file__)
-
 
 class Aircraft:
     def __init__(
@@ -85,13 +83,13 @@ class Aircraft:
         return self.lat, self.lon
 
 
-# {hex: Aircraft}
+# {hex string: aircraft object}
 active_aircraft: dict[str, Aircraft] = {}
 
 
-def read_json(filename: str) -> dict:
-    with open(os.path.join(dirname, f"json/{filename}"), "r") as file:
-        return json.loads(file.read())
+def read_json(path: str) -> dict:
+    with open(path, "r") as file:
+        return json.load(file)
 
 
 # Run only once when a new aircraft is detected
@@ -154,7 +152,7 @@ def aircraft_string(ac: Aircraft) -> str:
 
 # Main loop
 while True:
-    for data in read_json("aircraft.json")["aircraft"]:
+    for data in read_json(sys.argv[1])["aircraft"]:
         if data["hex"] in active_aircraft:
             active_aircraft[data["hex"]].update(data)
         else:
