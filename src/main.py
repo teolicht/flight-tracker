@@ -3,6 +3,8 @@ import requests
 import os
 import time
 import sys
+from rich.live import Live
+from rich.table import Table
 
 # PARSE
 # Take aircraft.json and populate each aicraft to its own Aircraft object
@@ -130,45 +132,68 @@ def enrich_aircraft(ac: Aircraft) -> None:
             ac.route_iata = (dep, des)
 
 
-def aircraft_string(ac: Aircraft) -> str:
-    lines = [
-        "-" * 50,
-        f"{ac.manufacturer} {ac.model} -- {ac.registration} flown by {ac.owner}",
-        f"Position: {ac.lat}, {ac.lon}",
-        f"{ac.altitude} ft | {ac.vert_rate} fpm | {ac.speed} kts | {ac.track}°",
-    ]
-    if ac.route_icao is not None and ac.route_iata is not None:
-        lines.append(
-            f"Flight: {ac.flight} | Route: "
-            f"{ac.route_icao[0]}--{ac.route_icao[1]} "
-            f"({ac.route_iata[0]}--{ac.route_iata[1]})"
-        )
-    lines += [
-        f"Signal strength: {ac.rssi} dB",
-        f"Image link: {ac.image}",
-    ]
-    return "\n".join(lines)
+def aircraft_table(aircraft: dict[str, Aircraft]) -> Table:
+    table = Table(title="ADS-B Aircraft")
 
+    table.add_column("Flight")
+    table.add_column("Registration")
+    table.add_column("Aircraft")
+    table.add_column("Owner")
+    table.add_column("Position")
+    table.add_column("Altitude")
+    table.add_column("V/S")
+    table.add_column("Speed")
+    table.add_column("Track")
+    table.add_column("Route")
+    table.add_column("RSSI")
+    table.add_column("Image")
+
+    for ac in aircraft.values():
+        position = (
+            f"{ac.lat:.3f}, {ac.lon:.3f}"
+            if ac.lat is not None and ac.lon is not None
+            else "-"
+        )
+
+        route = (
+            f"{ac.route_icao[0]}-{ac.route_icao[1]} "
+            f"({ac.route_iata[0]}-{ac.route_iata[1]})"
+            if ac.route_icao is not None and ac.route_iata is not None
+            else "-"
+        )
+
+        table.add_row(
+            ac.flight or "-",
+            ac.registration or "-",
+            f"{ac.manufacturer or '-'} {ac.model or '-'}",
+            ac.owner or "-",
+            position,
+            f"{ac.altitude} ft" if ac.altitude is not None else "-",
+            f"{ac.vert_rate} fpm" if ac.vert_rate is not None else "-",
+            f"{ac.speed} kt" if ac.speed is not None else "-",
+            f"{ac.track}°" if ac.track is not None else "-",
+            route,
+            f"{ac.rssi:.1f} dB",
+            ac.image or "-",
+        )
+
+    return table
 
 # Main loop
-while True:
-    for data in read_json(sys.argv[1])["aircraft"]:
-        if data["hex"] in active_aircraft:
-            active_aircraft[data["hex"]].update(data)
-        else:
-            obj = Aircraft(
-                data["hex"], data["messages"], data["seen"], data["rssi"]
-            )
-            obj.update(data)
-            enrich_aircraft(obj)
-            active_aircraft[data["hex"]] = obj
+with Live(aircraft_table(active_aircraft), refresh_per_second=1) as live:
+    while True:
+        for data in read_json(sys.argv[1])["aircraft"]:
+            if data["hex"] in active_aircraft:
+                active_aircraft[data["hex"]].update(data)
+            else:
+                obj = Aircraft(
+                    data["hex"], data["messages"], data["seen"], data["rssi"]
+                )
+                obj.update(data)
+                enrich_aircraft(obj)
+                active_aircraft[data["hex"]] = obj
 
-    # Print nicely
-    output = "\n".join(
-        aircraft_string(ac)
-        for ac in active_aircraft.values()
-    )
-    print(f"\033[H{output}", end="", flush=True)
+        live.update(aircraft_table(active_aircraft))
 
-    time.sleep(1)
+        time.sleep(1)
 
